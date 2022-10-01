@@ -8,6 +8,11 @@ import (
 	"github.com/g3n/engine/math32"
 )
 
+// swept aabb collision detection & response
+// source:
+// - 2d: https://www.gamedev.net/articles/programming/general-and-gameplay-programming/swept-aabb-collision-detection-and-response-r3084/
+// - 3d: https://gist.github.com/iam4722202468/590c032cb5eeb60437e47e8e2cbb5091
+
 type AABBox struct {
 	x, y, z    float32
 	w, h, d    float32
