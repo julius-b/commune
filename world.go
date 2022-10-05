@@ -12,20 +12,26 @@ import (
 	"github.com/g3n/engine/renderer"
 )
 
-const CHUNK_SIZE = 2
+const CHUNK_SIZE = 6
+const CHUNK_Y = 1 // CHUNK_SIZE
 
 type World struct {
 	scene *core.Node
 
-	gopherNode *core.Node
-	velocity   float32 // linear velocity (m/s)
-	rotvel     float32 // rotation velocity (rad/s)
-	gravity    float32 // linear acceleration (m/s^2)
+	gopher   Entity
+	velocity float32 // linear velocity (m/s)
+	rotvel   float32 // rotation velocity (rad/s)
+	gravity  float32 // linear acceleration (m/s^2)
 
 	// shared
 	CubeGeo  *geometry.Geometry
 	Mat      Materials
 	MakeCube func(mat *material.Standard) func() *graphic.Mesh
+}
+
+type Entity struct {
+	node     *core.Node
+	Velocity math32.Vector3
 }
 
 type Materials struct {
@@ -35,7 +41,7 @@ type Materials struct {
 }
 
 func (w *World) Update(renderer *renderer.Renderer, deltaTime time.Duration) {
-	gbox := w.gopherNode.BoundingBox()
+	gbox := w.gopher.node.BoundingBox()
 	children := w.scene.Children()
 	colls := 0
 	log.Debug("checking #" + fmt.Sprint(len(children)) + " (-1) collisions")
@@ -54,7 +60,7 @@ func (w *World) Update(renderer *renderer.Renderer, deltaTime time.Duration) {
 
 func (w *World) NewChunk(chunkX, chunkY, chunkZ float32) {
 	for x := 0; x < CHUNK_SIZE; x++ {
-		for y := 0; y < CHUNK_SIZE; y++ {
+		for y := 0; y < CHUNK_Y; y++ {
 			for z := 0; z < CHUNK_SIZE; z++ {
 				var cube *graphic.Mesh
 				if y == 0 {
@@ -70,9 +76,11 @@ func (w *World) NewChunk(chunkX, chunkY, chunkZ float32) {
 			}
 		}
 	}
-	cube := w.MakeCube(w.Mat.Stone)()
-	cube.SetPosition(chunkX+1, chunkY+1, chunkZ+1)
-	w.scene.Add(cube)
+	for i := 0; i < 6; i++ {
+		cube := w.MakeCube(w.Mat.Stone)()
+		cube.SetPosition(chunkX+1, chunkY+1, chunkZ+float32(i))
+		w.scene.Add(cube)
+	}
 }
 
 // y: green, up/down

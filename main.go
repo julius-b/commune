@@ -38,83 +38,114 @@ type Game struct {
 
 	world *World
 
-	commands [CMD_LAST]bool // commands states
+	commands [CMD_LAST]bool // command states
 }
 
 // Update is called every frame.
 func (g *Game) Update(renderer *renderer.Renderer, deltaTime time.Duration) {
+	dt := float32(deltaTime.Seconds())
+
+	// can be used after collision detection by others
+	g.world.gopher.Velocity = math32.Vector3{}
 
 	// Get player world position
 	var position math32.Vector3
-	g.world.gopherNode.WorldPosition(&position)
-	// smooth / wall-sliding collision
-	// position.Add(&direction)
-	// Get player world direction
-	var quat math32.Quaternion
-	g.world.gopherNode.WorldQuaternion(&quat)
-	fullDir := math32.Vector3{}
+	g.world.gopher.node.WorldPosition(&position)
 
-	gg := g.world.gravity * float32(deltaTime.Seconds())
-	gravity := math32.Vector3{0, -1, 0}
-	gravity.ApplyQuaternion(&quat)
-	gravity.Normalize()
-	gravity.MultiplyScalar(gg)
-	//fullDir.Add(&gravity)
-
-	// apply commands to player relative to in-game direction
+	// apply commands to player relative to world direction
 	if g.commands[CMD_LEFT] || g.commands[CMD_RIGHT] {
 		// Calculates angle delta to rotate
-		angle := g.world.rotvel * float32(deltaTime.Seconds())
+		angle := g.world.rotvel * dt
 		if g.commands[CMD_RIGHT] {
 			angle = -angle
 		}
-		g.world.gopherNode.RotateY(angle)
+		g.world.gopher.node.RotateY(angle)
 	}
 	if g.commands[CMD_FORWARD] || g.commands[CMD_BACKWARD] {
 		// Calculates the distance to move
-		dist := g.world.velocity * float32(deltaTime.Seconds())
+		dist := g.world.velocity
 
-		direction := math32.Vector3{1, 0, 0} // player always move towards own x
-		direction.ApplyQuaternion(&quat)     // make player forward into world forward
-		direction.Normalize()
-		direction.MultiplyScalar(dist)
+		// player always moves towards own x
+		direction := math32.Vector3{1, 0, 0}
 		if g.commands[CMD_BACKWARD] {
 			direction.Negate()
 		}
-		fullDir.Add(&direction)
+		direction.MultiplyScalar(dist)
+		g.world.gopher.Velocity.Add(&direction)
 
 		log.Debug("direction: " + fmt.Sprint(direction))
 	}
 
-	log.Debug("fullDir: " + fmt.Sprint(fullDir))
-	var ignored float32
-	gbox := g.world.gopherNode
-	gbbox := NewAABBoxFromBox3(gbox, fullDir.X, fullDir.Y, fullDir.Z)
-	log.Debug("gbbox: " + fmt.Sprint(gbbox))
+	// direction needs to be applied every time because rotation might change
+
+	// gravity is applied every time to velocity, works
+	// direction is applied only on just pressed, only works when -> velocity looses direction
+	gg := g.world.gravity
+	gravity := math32.Vector3{0, -1, 0}
+	gravity.MultiplyScalar(gg)
+	g.world.gopher.Velocity.Add(&gravity)
+
+	// Get player world direction (every update), after rotation
+	var quat math32.Quaternion
+	g.world.gopher.node.WorldQuaternion(&quat)
+
+	// velocity (x/z) is only updated when a key is just pressed or unpressed
+	// but when rotating
+	// translate player movement into world movement
+	g.world.gopher.Velocity.ApplyQuaternion(&quat)
+	//g.world.gopher.Velocity.Normalize() // TODO certainly not here... anywhere?
+	g.world.gopher.Velocity.MultiplyScalar(dt)
+
+	// run multiple times: to implement sliding, the dt gets subtracted and the colliding axis (|normal|>0) set to zero, then movement in other directions can be allowed
+	// one vector, pressing & unpressing keys updates it. wall-sliding resets one value temporarily
+
 	children := g.world.scene.Children()
 	log.Debug("checking #" + fmt.Sprint(len(children)) + " (-1) collisions")
-	collisiontimes := make([]float32, 0, len(children))
+	staticBoxes := make([]AABBox, 0, len(children)-1)
 	for _, v := range children {
 		if v.Name() != "gopher" {
-			bbox := v
-			bbbox := NewAABBoxFromBox3(bbox.GetNode(), 0, 0, 0)
-			log.Debug("bbbox: " + fmt.Sprintf("%#v", bbbox))
-			collisiontimes = append(collisiontimes, SweptAABB(gbbox, bbbox, &ignored, &ignored, &ignored))
+			staticBoxes = append(staticBoxes, NewAABBoxFromBox3(v.GetNode().Position(), math32.Vector3{}))
 		}
 	}
-	log.Debug("collisiontimes: " + fmt.Sprint(collisiontimes))
-	mincollisiontime := Min(collisiontimes)
-	log.Debug("mincollisiontime: " + fmt.Sprint(mincollisiontime))
-	fullDir.MultiplyScalar(mincollisiontime)
+	cnt := 0
+colldet:
+	cnt++
+	log.Debug("gopher vel: " + fmt.Sprint(g.world.gopher.Velocity))
+	gbbox := NewAABBoxFromBox3(position, g.world.gopher.Velocity)
+	log.Debug("gbbox: " + fmt.Sprint(gbbox))
+	collision := detect(gbbox, staticBoxes)
+	log.Debug("collision: " + fmt.Sprintf("%#v", collision))
 
-	position.Add(&fullDir)
-	g.world.gopherNode.SetPositionVec(&position)
+	if collision.dt < 1 {
+		// coll.dt may be 0, when walking into a wall -- why not when gravity?
+		//dt -= collision.dt
+		if collision.nx != 0 {
+			println("x coll o.O")
+			g.world.gopher.Velocity.X = 0
+		}
+		if collision.ny != 0 {
+			g.world.gopher.Velocity.Y = 0
+		}
+		if collision.nz != 0 {
+			println("z coll o.O")
+			g.world.gopher.Velocity.Z = 0
+		}
+		if cnt < 2 {
+			goto colldet
+		}
+	}
+	g.world.gopher.Velocity.MultiplyScalar(collision.dt)
+
+	log.Debug("oldpos: " + fmt.Sprintf("%#v", position))
+	position.Add(&g.world.gopher.Velocity)
+	log.Debug("newpos: " + fmt.Sprintf("%#v", position))
+	g.world.gopher.node.SetPositionVec(&position)
 
 	g.camera.LookAt(&position, &math32.Vector3{0, 2, 0})
 	g.orbit.SetTarget(position) // updated independently
 
 	cpos := g.camera.Position()
-	cpos.Add(&fullDir)
+	cpos.Add(&g.world.gopher.Velocity)
 	g.camera.SetPositionVec(&cpos)
 	//position.Add(&math32.Vector3{-3, 1, 0})
 	//g.camera.SetPositionVec(&position)
@@ -167,17 +198,21 @@ func main() {
 	gui.Manager().Set(g.scene)
 	g.world.NewChunk(0, 0, 0)
 
-	g.world.velocity = 10.0
+	// TODO config
+	g.world.velocity = 3.0
 	g.world.gravity = 9.81
-	g.world.rotvel = 2.0
-	g.LoadGopher()
-	g.world.gopherNode.SetPosition(0, 1.5, -1)
-	g.world.scene.Add(g.world.gopherNode)
+	g.world.rotvel = 4.0
+
+	g.world.gopher = Entity{
+		node: g.LoadGopher(),
+	}
+	g.world.gopher.node.SetPosition(0, 1.5, -1)
+	g.world.scene.Add(g.world.gopher.node)
 
 	// Create camera
 	g.camera = camera.New(1)
 	//g.camera.SetPosition(0, 1, -2)
-	gpos := g.world.gopherNode.Position()
+	gpos := g.world.gopher.node.Position()
 	gpos2 := gpos.Clone()
 	gpos2.Add(&math32.Vector3{-3, 1, 0})
 	g.camera.SetPositionVec(gpos2)
@@ -245,7 +280,7 @@ func (g *Game) onKey(evname string, ev interface{}) {
 }
 
 // LoadGopher loads the gopher model and adds to it the sound players associated to it
-func (g *Game) LoadGopher() {
+func (g *Game) LoadGopher() *core.Node {
 	log.Debug("Decoding gopher model...")
 
 	// Decode model in OBJ format
@@ -260,9 +295,10 @@ func (g *Game) LoadGopher() {
 		panic(err.Error())
 	}
 
-	g.world.gopherNode = core.NewNode()
-	g.world.gopherNode.SetName("gopher")
-	g.world.gopherNode.Add(gopherTop)
+	node := core.NewNode()
+	node.SetName("gopher")
+	node.Add(gopherTop)
 
 	log.Debug("Done decoding gopher model")
+	return node
 }
